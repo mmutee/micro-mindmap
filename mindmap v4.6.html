@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mind Map Task Organizer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #mindmap {
+            width: 100vw;
+            height: 90vh;
+            border: 1px solid black;
+        }
+        #controls {
+            margin: 10px;
+        }
+        button, input {
+            margin-right: 10px;
+        }
+    </style>
+    <script src="d3.v7.min.js"></script>
+</head>
+<body>
+    <div id="controls">
+        <input type="file" id="loadFile" onchange="loadFromFile(event)" />
+        <button onclick="saveToFile()">Save</button>
+        <button onclick="zoomIn()">Zoom In</button>
+        <button onclick="zoomOut()">Zoom Out</button>
+    </div>
+    <div id="mindmap"></div>
+
+    <script>
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        let zoomLevel = 1;
+
+        const svg = d3.select("#mindmap")
+            .append("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .call(d3.zoom().on("zoom", zoomed))
+            .append("g");
+
+        let data = {
+            name: "Root Task",
+            description: "This is the root task",
+            children: [],
+            done: false,
+            highlighted: false
+        };
+
+        function zoomed(event) {
+            svg.attr("transform", event.transform);
+        }
+
+        function addTask(parent = null) {
+            const taskName = prompt("Enter task name:");
+            const description = "Enter task description:";
+            if (taskName && description) {
+                if (parent === null) {
+                    parent = data;
+                }
+                if (!parent.children) {
+                    parent.children = [];
+                }
+                parent.children.push({ name: taskName, description, children: [], done: false, highlighted: false });
+                render();
+            }
+        }
+
+        function render() {
+            svg.selectAll("*").remove();
+
+            const tree = d3.tree().size([height - 100, width - 200]);
+            const root = d3.hierarchy(data);
+
+            tree(root);
+
+            // Curved lines
+            svg.selectAll(".link")
+                .data(root.links())
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkHorizontal()
+                    .x(d => d.y)
+                    .y(d => d.x))
+                .attr("fill", "none")
+                .attr("stroke", "#ccc")
+                .attr("stroke-width", 2);
+
+            // Nodes
+            const nodes = svg.selectAll(".node")
+                .data(root.descendants())
+                .enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.y},${d.x})`)
+                .on("click", (event, d) => handleClick(event, d))
+                .on("contextmenu", (event, d) => handleRightClick(event, d));
+
+            nodes.append("circle")
+                .attr("r", 10)
+                .attr("fill", "lightblue");
+
+            nodes.append("text")
+                .attr("dy", 3)
+                .attr("x", 15)
+                .style("text-anchor", "start")
+                .style("font-weight", d => d.data.highlighted ? "bold" : "normal")
+                .style("text-decoration", d => d.data.done ? "line-through" : "none")
+                .text(d => d.data.name);
+        }
+
+        function handleClick(event, d) {
+            if (event.altKey) {
+                editTaskName(d);
+            } else if (event.ctrlKey) {
+                markTaskDone(d);
+            } else if (event.shiftKey) {
+                highlightTask(d);
+            } else {
+                addTask(d.data);
+            }
+            render();
+        }
+
+        function handleRightClick(event, d) {
+            event.preventDefault(); // Prevent the default right-click menu
+            deleteTask(d);
+            render();
+        }
+
+        function highlightTask(d) {
+            d.data.highlighted = !d.data.highlighted; // Toggle the highlighted state
+        }
+
+        function deleteTask(d) {
+            if (d.parent) {
+                const index = d.parent.data.children.indexOf(d.data);
+                if (index !== -1) {
+                    d.parent.data.children.splice(index, 1);
+                }
+            }
+        }
+
+        function editTaskName(d) {
+            const newName = prompt("Enter new task name:", d.data.name);
+            if (newName) {
+                d.data.name = newName;
+            }
+        }
+
+        function markTaskDone(d) {
+            d.data.done = !d.data.done; // Toggle the "done" state
+        }
+
+        function saveToFile() {
+            const csvContent = exportToCSV(data);
+            const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", "mindmap.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        function loadFromFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                data = importFromCSV(content);
+                render();
+            };
+            reader.readAsText(file);
+        }
+
+        function exportToCSV(node, parentId = null, csvLines = [], currentId = 0) {
+            const line = `${currentId},${parentId !== null ? parentId : "root"},${node.name},${node.description},${node.done},${node.highlighted}`;
+            csvLines.push(line);
+            const childId = currentId;
+            if (node.children) {
+                node.children.forEach((child, i) => {
+                    exportToCSV(child, childId, csvLines, ++currentId);
+                });
+            }
+            return csvLines.join("\n");
+        }
+
+        function importFromCSV(csvContent) {
+            const rows = csvContent.split("\n").map(row => row.split(","));
+            const nodes = {};
+            let root = null;
+            rows.forEach(([id, parentId, name, description, done, highlighted]) => {
+                nodes[id] = { name, description, children: [], done: done === "true", highlighted: highlighted === "true" };
+                if (parentId === "root") {
+                    root = nodes[id];
+                } else {
+                    nodes[parentId].children.push(nodes[id]);
+                }
+            });
+            return root;
+        }
+
+        function zoomIn() {
+            zoomLevel += 0.1;
+            d3.zoom().scaleTo(svg, zoomLevel);
+        }
+
+        function zoomOut() {
+            zoomLevel = Math.max(0.1, zoomLevel - 0.1);
+            d3.zoom().scaleTo(svg, zoomLevel);
+        }
+
+        render();
+    </script>
+</body>
+</html>
